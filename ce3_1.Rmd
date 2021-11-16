@@ -1,0 +1,329 @@
+---
+title: "chicken e3 initial"
+author: "Rodrigo Senovilla Ganzo"
+date: "20/7/2021"
+output: ce3_guideline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(SeuratObject)
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(Matrix)
+library(glmGamPoi)
+library(sctransform)
+library(limma)
+library(clustree)
+library(plyr)
+library(readxl)
+```
+
+## Chicken_ERA
+
+```{r}
+c_era_data_19<-Read10X(data.dir ="C:/Users/rodri/Documents/Single_cell_phylobrain/chicken_e3/chick_e3_run/chicken_era/outs/filtered_feature_bc_matrix")
+head(c_era_data_19)
+c_era_19<-CreateSeuratObject(c_era_data_19, project = "chicken_era")
+c_era_19
+```
+
+## CHICKEN_RSG
+
+```{r}
+c_rsg_data_19<-Read10X(data.dir = "C:/Users/rodri/Documents/Single_cell_phylobrain/chicken_e3/chick_e3_run/chicken_rsg/outs/filtered_feature_bc_matrix")
+head(c_rsg_data_19)
+c_rsg_19<-CreateSeuratObject(c_rsg_data_19, project = "chicken_rsg")
+c_rsg_19
+```
+##Quality Control
+
+```{r, echo=F}
+c_era_19[["percent.mt"]] <- PercentageFeatureSet(c_era_19, pattern = "^MT-")
+c_rsg_19[["percent.mt"]] <- PercentageFeatureSet(c_rsg_19, pattern = "^MT-")
+
+VlnPlot(c_era_19, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"), cols = "gold")
+VlnPlot(c_rsg_19, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"))
+
+VlnPlot(c_era_19, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"), cols = "gold", pt.size = 0)
+VlnPlot(c_rsg_19, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"), pt.size = 0)
+
+plot1 <- FeatureScatter(c_era_19, feature1 = "nCount_RNA", feature2 = "percent.mt", cols="gold")
+plot2 <- FeatureScatter(c_era_19, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", cols="gold")
+plot1 + plot2
+plot1 <- FeatureScatter(c_rsg_19, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(c_rsg_19, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+## Merge chicken
+
+```{r}
+c_era_19 <- subset(c_era_19, subset = nFeature_RNA > 1500 & nFeature_RNA < 6000 & percent.mt < 5)
+c_rsg_19 <- subset(c_rsg_19, subset = nFeature_RNA > 1500 & nFeature_RNA < 6000 & percent.mt < 5)
+```
+
+
+## Cell Cycle indicators 
+
+We correct based on a list of genes provided by Seurat and other by Fernando (ref in files)
+```{r , echo=FALSE}
+library(readr)
+cc.fer <- read_delim("../Cellcycle/fer_rsg_genes.csv", 
+    ";", escape_double = FALSE, trim_ws = TRUE)
+s.genes <- unique(toupper(c(cc.genes$s.genes,cc.fer$`Phase S`)))
+g2m.genes <- unique(toupper(c(cc.genes$g2m.genes,cc.fer$`Phase G2M`)))
+```
+## Visualization of gene expression across clusters
+```{r, echo=F}
+SexCycleScoring <- function (object, w.features, z.features, ctrl = NULL, set.ident = FALSE, 
+          ...) 
+{
+  name <- "Cell.Cycle"
+  features <- list(w.Score = w.features, z.Score = z.features)
+  if (is.null(x = ctrl)) {
+    ctrl <- min(vapply(X = features, FUN = length, FUN.VALUE = numeric(length = 1)))
+  }
+  object.cc <- AddModuleScore(object = object, features = features, 
+                              name = name, ctrl = ctrl, ...)
+  cc.columns <- grep(pattern = name, x = colnames(x = object.cc[[]]), 
+                     value = TRUE)
+  cc.scores <- object.cc[[cc.columns]]
+  rm(object.cc)
+  CheckGC()
+  assignments <- apply(X = cc.scores, MARGIN = 1, FUN = function(scores, 
+                                                                 first = "W", second = "Z", null = "NULL") {
+    if (all(scores < 0)) {
+      return(null)
+    }
+    else {
+      if (length(which(x = scores == max(scores))) > 1) {
+        return("Undecided")
+      }
+      else {
+        return(c(first, second)[which(x = scores == 
+                                        max(scores))])
+      }
+    }
+  })
+  cc.scores <- merge(x = cc.scores, y = data.frame(assignments), 
+                     by = 0)
+  colnames(x = cc.scores) <- c("rownames", "w.Score", "z.Score", 
+                               "Sex")
+  rownames(x = cc.scores) <- cc.scores$rownames
+  cc.scores <- cc.scores[, c("w.Score", "z.Score", "Sex")]
+  object[[colnames(x = cc.scores)]] <- cc.scores
+  if (set.ident) {
+    object[["old.ident"]] <- Idents(object = object)
+    Idents(object = object) <- "Sex"
+  }
+  return(object)
+}
+```
+
+```{r, echo=F}
+sex_features<-read.csv("sex_genes.csv", sep = ";", header = T)
+sex_features
+```
+
+##Integration of datasets
+
+
+```{r , echo=FALSE}
+chick.list <- list(c_era_19, c_rsg_19)
+chick.list <- lapply(X= chick.list, FUN = CellCycleScoring, s.features = s.genes, g2m.features = g2m.genes, set.ident = TRUE)
+chick.list <- lapply(X= chick.list, FUN = SexCycleScoring, z.features = sex_features[,1], w.features = sex_features[,2], set.ident = TRUE)
+chick.list <- lapply(X = chick.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("S.Score", "G2M.Score","percent.mt", "z.Score", "w.Score"))
+features <- SelectIntegrationFeatures(object.list = chick.list)
+chick.list <- PrepSCTIntegration(object.list = chick.list, anchor.features = features)
+chick.list <- lapply(X = chick.list, FUN = RunPCA, features = features)
+anchors <- FindIntegrationAnchors(object.list = chick.list, reference = c(1, 2), reduction = "cca", dims = 1:50, normalization.method = "SCT", anchor.features = features)
+chick_19_integrate <- IntegrateData(anchorset = anchors, normalization.method = "SCT", dims = 1:50)
+```
+
+# I used no expected option, just run without any additional indication
+
+To visualize the result, there are several ways to do it (VizDimReduction(), DimPlot(), and DimHeatmap())
+
+
+```{r , echo=FALSE}
+chick_19_integrate <- RunPCA(chick_19_integrate, npcs = 50, verbose = FALSE)
+print(chick_19_integrate[["pca"]], dims = 1:5, nfeatures = 5)
+VizDimLoadings(chick_19_integrate, dims = 1:2, reduction = "pca")
+```
+
+```{r , echo=FALSE}
+DimPlot(chick_19_integrate, reduction = "pca")
+```
+
+```{r , echo=FALSE}
+DimHeatmap(chick_19_integrate, dims = 1, cells = 500, balanced = TRUE)
+```
+This representation allows to explore primary sources of heterogenity in the dataset
+
+```{r , echo=FALSE}
+DimHeatmap(chick_19_integrate, dims = 1:15, cells = 500, balanced = TRUE)
+for (i in 1:15) {
+print(DimHeatmap(chick_19_integrate, dims = i, cells = 500, balanced = TRUE))}
+```
+
+
+## Alternative heuristic method for obtaining dimensionality
+
+```{r , echo=FALSE}
+ElbowPlot(chick_19_integrate, ndims = 50)
+
+```
+
+It is weird because it seems that all PC are important to the analysis regardin JackStraw, but considering Elbowplot, they are not!
+
+## Cluster the cells 
+
+Using different distance approach (euclidian distance in PCs)
+
+
+```{r , echo=FALSE}
+resolution.range <- c(0,0.2,0.4,0.5,1,1.5,1.8,2.4)
+chick_19_integrate <- FindNeighbors(chick_19_integrate, dims = 1:50)
+chick_19_integrate <- FindClusters(chick_19_integrate, resolution = resolution.range)
+```
+
+An example for showing characterization of five initial cells
+
+```{r , echo=FALSE}
+head(Idents(chick_19_integrate), 5)
+```
+
+## Non-linear dimensional reduction (UMAP/tSNE)
+
+This is the algorithm for UMAP
+
+```{r , echo=FALSE}
+chick_19_integrate <- RunUMAP(chick_19_integrate, resolution= resolution.range , dims = 1:50)
+```
+
+and below its visualization
+
+```{r , echo=FALSE}
+Idents(chick_19_integrate)<-"Sex"
+DimPlot(chick_19_integrate, reduction = "umap", label = T)
+```
+```{r, echo=F}
+Idents(chick_19_integrate)<-"Sex"
+sex.markers <- FindAllMarkers(chick_19_integrate, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+Z<- sex.markers %>% group_by(cluster) %>% top_n(n = 15, wt = avg_log2FC) %>% filter(cluster=="Z")
+for(i in 1:length(Z$gene)){
+  print(FeaturePlot(chick_19_integrate, Z$gene[i]))
+}
+W<- sex.markers %>% group_by(cluster) %>% top_n(n = 15, wt = avg_log2FC) %>% filter(cluster=="W")
+for(i in 1:length(W$gene)){
+  print(FeaturePlot(chick_19_integrate, W$gene[i]))
+}
+FeaturePlot(chick_19_integrate, "HINTW")
+```
+
+```{r , echo=FALSE}
+Idents(chick_19_integrate)<-"integrated_snn_res.0.4"
+DimPlot(chick_19_integrate, reduction = "umap", label = T)
+```
+```{r , echo=FALSE}
+DimPlot(chick_19_integrate, reduction = "umap", group.by = "orig.ident")
+```
+## Finding differentially expressed features (Cluster biomarkers) 
+
+All cluster markers
+
+
+```{r, echo=FALSE}
+curated_list<-read_xlsx("../Curated Gene Markers List.xlsx")
+chick_19_integrate.markers <- FindAllMarkers(chick_19_integrate, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+chick_19_integrate.top10 <- chick_19_integrate.markers %>% group_by(cluster) %>% top_n(n = 15, wt = avg_log2FC)
+chick_19_integrate.annot<- merge(chick_19_integrate.top10, curated_list, by.x= "gene") 
+chick_19_integrate.annot<- rbind.fill(chick_19_integrate.annot, chick_19_integrate.top10[!(chick_19_integrate.top10$gene %in% chick_19_integrate.annot$gene),]) %>% arrange(cluster) %>% relocate(gene, .after= cluster)
+write.csv(chick_19_integrate.annot,"./ce3_1 cleaning/res0.2.csv")
+chick_19_integrate.annot
+```
+
+## Visualization of gene expression across clusters
+
+```{r, echo=F}
+FeaturePlot(chick_19_integrate, features = "CCL4")
+```
+
+```{r, echo=F}
+X<- chick_19_integrate.markers %>% group_by(cluster) %>% top_n(n = 15, wt = avg_log2FC) %>% filter(cluster==17)
+for(i in 1:length(X$gene)){
+  print(FeaturePlot(chick_19_integrate, X$gene[i]))
+}
+```
+
+```{r, echo=F}
+FeaturePlot(chick_19_integrate, features = "RSPO2")
+```
+
+```{r, echo=F}
+DefaultAssay(chick_19_integrate)<-"integrated"
+FeaturePlot(chick_19_integrate, features = "SMC2")
+chick_19_integrate[["integrated"]]@var.features[grep("NKX", chick_19_integrate[["integrated"]]@var.features)]
+```
+
+
+```{r , echo=FALSE}
+VlnPlot(chick_19_integrate, features = c("PAX6"))
+```
+
+```{r , echo=FALSE}
+
+VlnPlot(chick_19_integrate, features = c("FGF8"))
+
+```
+
+
+```{r , echo=FALSE}
+chick_19_integrate.gene.DE=(chick_19_integrate.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC))$gene
+```
+
+## 
+
+
+
+```{r  echo=FALSE}
+top10 <- chick_19_integrate.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+DoHeatmap(chick_19_integrate, features = top10$gene) + NoLegend()
+```
+
+## 
+
+
+
+```{r , echo=FALSE}
+
+new.cluster.ids <- c("FB", "MB", "HB1", "MES", "FAR", "DIEN", "HB2", "NEU", "FP", "ITSMO", "RP", "NC", "VAS", "ENDO", "?", "MUS", "MACRO", "ERI")
+names(new.cluster.ids) <- levels(chick_19_integrate)
+chick_19_integrate <- RenameIdents(chick_19_integrate, new.cluster.ids)
+chick_19_integrate[["ce3_1"]]<-Idents(chick_19_integrate)
+p1<-DimPlot(chick_19_integrate, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+p2<-DimPlot(chick_19_integrate, reduction = "tsne", label = TRUE, pt.size = 0.5) + NoLegend()
+p1
+p1+p2
+```
+
+```{r , echo=FALSE}
+VlnPlot(chick_19_integrate, features = "nFeature_RNA")
+VlnPlot(chick_19_integrate, features = "nCount_RNA")
+VlnPlot(chick_19_integrate, features = "percent.mt")
+plot1 <- FeatureScatter(chick_19_integrate, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(chick_19_integrate, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+```{r , echo=FALSE}
+saveRDS(chick_19_integrate, file = "./ce3_1.rds")
+```
+
+

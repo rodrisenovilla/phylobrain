@@ -1,0 +1,408 @@
+---
+title: "Rueda-Alaña Chick Early Data"
+author: "Rodrigo Senovilla Ganzo"
+date: "6/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(Matrix)
+library(glmGamPoi)
+library(sctransform)
+library(limma)
+library(clustree)
+library(pvclust)
+library(Hmisc)
+library(corrplot)
+library(ggcorrplot)
+library(stringr)
+library(biomaRt)
+```
+
+## 1to1 otrhologs
+
+Obtain orthologs names, the substitution step will be done at the end though
+
+## Mouse genes 1to1
+
+```{r cars}
+if(exists("ensembl")==F){
+ensembl<-useMart("ensembl")}
+datasets <- listDatasets(ensembl)
+if(exists("mouse")==F){
+mouse<-useDataset("mmusculus_gene_ensembl", mart=ensembl)}
+attributes = c("external_gene_name", "ensembl_gene_id", "ggallus_homolog_ensembl_gene","ggallus_homolog_perc_id_r1", "ggallus_homolog_orthology_type", "ggallus_homolog_subtype", "ggallus_homolog_perc_id")
+mouse_genes <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"), mart = mouse)
+for(i in 1:length(mouse_genes[,1])){
+  if(mouse_genes[i,1]==""){
+    mouse_genes[i,1]<-mouse_genes[i,2]
+  }
+}
+orth.mouse = getBM(attributes, filters="with_ggallus_homolog",values=TRUE, mart = mouse, bmHeader=FALSE)
+orth.mouse<-orth.mouse[which(orth.mouse$ggallus_homolog_orthology_type=="ortholog_one2one"),]
+ensembl.mouse<- orth.mouse[,2]
+external.mouse<-orth.mouse[,1]
+rownames(orth.mouse)<-ensembl.mouse
+TFdata_mouse <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"),filters = 'go', values = c('GO:0006366', 'GO:0000981', 'GO:0003700', 'GO:0006383', 'GO:0000995', 'GO:0001228', 'GO:0001227'), mart = mouse)
+```
+
+## Chicken genes 1to1
+
+```{r cars}
+if(exists("ensembl")==F){
+ensembl<-useMart("ensembl")}
+datasets <- listDatasets(ensembl)
+if(exists("chicken")==F){
+chicken<-useDataset("ggallus_gene_ensembl", mart=ensembl)}
+attributes = c("external_gene_name", "ensembl_gene_id", "mmusculus_homolog_ensembl_gene","mmusculus_homolog_perc_id_r1", "mmusculus_homolog_orthology_type", "mmusculus_homolog_subtype", "mmusculus_homolog_perc_id")
+chicken_genes <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"), mart = chicken)
+for(i in 1:length(chicken_genes[,1])){
+  if(chicken_genes[i,1]==""){
+    chicken_genes[i,1]<-chicken_genes[i,2]
+  }
+}
+orth.chicken = getBM(attributes, filters="with_mmusculus_homolog",values=TRUE, mart = chicken, bmHeader=FALSE)
+orth.chicken<-orth.chicken[which(orth.chicken$mmusculus_homolog_orthology_type=="ortholog_one2one"),]
+ensembl.chicken<- orth.chicken[,2]
+external.chicken<-orth.chicken[,1]
+rownames(orth.chicken)<-ensembl.chicken
+TFdata_chicken <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"),filters = 'go', values = c('GO:0006366', 'GO:0000981', 'GO:0003700', 'GO:0006383', 'GO:0000995', 'GO:0001228', 'GO:0001227'), mart = chicken)
+```
+
+
+#Indentities
+
+This step will be removed in the future, as the identities will be well stablished beforehand and we will know what each cluster stands for. 
+
+```{r , echo=FALSE}
+me9 <- readRDS("../mouse_e9/me9_sct5f.rds")
+era <-readRDS("../chicken_e3/ce3_4f.rds")
+```
+
+```{r , echo=FALSE}
+me9[['seurat_clusters']]<-me9[['me9_sct5_res2.8']]
+era[['seurat_clusters']]<-era[['ce3_4']]
+Idents(me9) <- "seurat_clusters"
+Idents(era) <- "seurat_clusters"
+```
+
+```{r cars, warning=FALSE}
+era_orth<-era
+era.data<-GetAssayData(object = era, assay = "RNA")
+era.data_ensembl<-merge(x=chicken_genes[,1:2], y=era.data, by.x= "external_gene_name", by.y= "row.names")
+era.data_orth<-merge(x=orth.chicken[,2:3], y=era.data_ensembl, by.x= "ensembl_gene_id", by.y= "ensembl_gene_id")
+era.data_orth<-era.data_orth[,-c(1,3)]
+era.data_orth<-merge(x=mouse_genes, y=era.data_orth, by.x = "ensembl_gene_id", by.y = "mmusculus_homolog_ensembl_gene")
+era.data_orth$external_gene_name<-sub('[.]','-',make.names(era.data_orth$external_gene_name, unique=T))
+rownames(era.data_orth)<-toupper(era.data_orth$external_gene_name)
+era.data_orth<-era.data_orth[,-c(1,2)]
+era.data_orth<-Matrix(as.matrix(era.data_orth),sparse=TRUE)
+mouse_gene_assay <- CreateAssayObject(era.data_orth)
+era_orth[['RNA']] <- mouse_gene_assay
+```
+
+
+##Integration of datasets
+
+```{r , echo=FALSE}
+DefaultAssay(era_orth)<-"RNA"
+chick.list <- SplitObject(era_orth, split.by="orig.ident")
+chick.list <- lapply(X = chick.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("S.Score", "G2M.Score","percent.mt", "z.Score", "w.Score", "percent.hist"))
+features <- SelectIntegrationFeatures(object.list = chick.list)
+chick.list <- PrepSCTIntegration(object.list = chick.list, anchor.features = features)
+chick.list <- lapply(X = chick.list, FUN = RunPCA, features = features)
+anchors <- FindIntegrationAnchors(object.list = chick.list, reference = c(1, 2), reduction = "cca", dims = 1:50, normalization.method = "SCT", anchor.features = features)
+era_orth <- IntegrateData(anchorset = anchors, normalization.method = "SCT", dims = 1:50)
+```
+
+
+```{r cars, warning=FALSE}
+me9_orth<-me9
+me9.data<-GetAssayData(object = me9, assay = "RNA")
+orth.mouse[,1]<-toupper(orth.mouse[,1])
+me9.data_orth<-merge(x=orth.mouse[,1:2], y=me9.data, by.x= "external_gene_name", by.y= "row.names")
+rownames(me9.data_orth)<-me9.data_orth$external_gene_name
+me9.data_orth<-me9.data_orth[,-c(1,2)]
+me9.data_orth<-Matrix(as.matrix(me9.data_orth),sparse=TRUE)
+mouse_gene_assay <- CreateAssayObject(me9.data_orth)
+me9_orth[['RNA']] <- mouse_gene_assay
+```
+
+```{r}
+DefaultAssay(me9_orth)<-"RNA"
+me9_orth.list <- SplitObject(me9_orth, split.by = "orig.ident")
+me9_orth.list <- lapply(X = me9_orth.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("percent.mt", "G2M.Score", "S.Score"))
+features <- SelectIntegrationFeatures(object.list = me9_orth.list)
+me9_orth.list <- PrepSCTIntegration(object.list = me9_orth.list, anchor.features = features)
+me9_orth.list <- lapply(X = me9_orth.list, FUN = RunPCA, features = features)
+anchors <- FindIntegrationAnchors(object.list = me9_orth.list, reduction = "cca", dims = 1:50, normalization.method = "SCT", anchor.features = features)
+me9_orth <- IntegrateData(anchorset = anchors, normalization.method = "SCT", dims = 1:50)
+```
+#Markers
+
+Although this would have alredy been done in the past, it is easier to get it again than save all gene markers. Or maybe not, it could be removed then. 
+
+```{r, echo=F}
+era.markers<-FindAllMarkers(era_orth,only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+me9.markers<-FindAllMarkers(me9_orth, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+```
+#Top gene markers
+
+Select the most differentially expressed genes, the top 400 of each cluster ordered by |avg_log2FC| and filtered by p_val_adj < 10^(-9). This was set based on Colquitt, but it could be changed. 
+
+```{r, echo=F}
+era.markers_top <-era.markers %>% group_by(cluster) %>% filter(p_val_adj < 10^(-9)) %>% arrange(abs(avg_log2FC)) %>% top_n(n=400) %>% dplyr::select(gene) 
+table(era.markers_top$cluster)
+me9.markers_top<-me9.markers %>% group_by(cluster) %>% filter(p_val_adj < 10^(-9)) %>% arrange(abs(avg_log2FC)) %>% top_n(n=400) %>% dplyr::select(gene) 
+table(me9.markers_top$cluster)
+```
+
+
+#Top Markers Subset - ERA
+
+```{r, echo=F}
+era_top<-era_orth
+era_top
+era_top[["SCT"]]@counts<-era_top[["SCT"]]@counts[era.markers_top$gene,]
+era_top[["SCT"]]@data<-era_top[["SCT"]]@data[era.markers_top$gene,]
+era_top[["SCT"]]@meta.features[era.markers_top$gene,'cluster']<-era.markers_top$cluster
+era_top
+```
+#g coefficient - ERA
+
+```{r, echo=F}
+Idents(era_top)<-"seurat_clusters"
+era_cluster.averages <- AverageExpression(era_top, assays = "SCT")
+Idents(era_top)<-"SCT_snn_res.0"
+era_averages <- AverageExpression(era_top, assays = "SCT")
+era_g<-era_cluster.averages$SCT/era_averages$SCT[,1]
+head(era_g)
+```
+
+#Top Markers Subset - me9
+
+
+```{r, echo=F}
+me9_top<-me9_orth
+me9_top
+me9_top[["SCT"]]@counts<-me9[["SCT"]]@counts[me9.markers_top$gene,]
+me9_top[["SCT"]]@data<-me9[["SCT"]]@data[me9.markers_top$gene,]
+me9_top[["SCT"]]@meta.features[me9.markers_top$gene,'cluster']<-me9.markers_top$cluster
+me9_top
+```
+#g coefficient - me9
+
+```{r, echo=F}
+Idents(me9_top)<-"seurat_clusters"
+me9_cluster.averages <- AverageExpression(me9_top, assays = "SCT")
+Idents(me9_top)<-"SCT_snn_res.0"
+me9_averages <- AverageExpression(me9_top, assays = "SCT")
+me9_g<-me9_cluster.averages$SCT/me9_averages$SCT[,1]
+head(me9_g)
+```
+
+
+#Correlation matrix
+
+Although the each species matrix only includes ortholog, we keep for comparisons only those genes presents in both datasets. 
+
+#Chicken vs Mice
+
+```{r, echo=F}
+era_ct<- c(
+"MB/DIEN-RP
+HB-RP
+HEM
+AMP
+OV
+aTEL
+bTEL
+tHT
+pHT
+P3
+aP2
+bP2
+P1
+PG
+aIT
+bMB
+pabMB
+a'abMB
+aMB
+pIT
+RL
+aR1-2
+aR3-8
+abR0-8
+bR0-8
+DIEN-FP
+MB-FP
+IT-FP
+HB-aFP
+HB-bFP
+TAL1 N
+MOT N
+TAL2 N
+LHX9 N
+LHX3 N
+SPAL N
+EI N
+LI N"
+)
+era_ct<-str_split(era_ct, '\n')[[1]]
+era_ct<-unlist(era_ct)
+```
+
+```{r, echo=F}
+me9_ct<- c(
+"MB/DIEN-RP
+HB-RP
+HEM
+AMP
+OV
+TEL1
+TEL2
+SPAL
+tHT
+ATO
+pHT
+P3
+P1-2
+aIT
+aMB
+bMB
+paIT
+RL
+EGL
+aR1
+aR2
+aR3
+aR4
+aR5
+abR1-2
+abR3
+abR4
+bR0-2
+bR3-5
+MB-FP
+IT-FP
+HB-FP
+MOT N
+TAL2 N
+MSX3 N
+LHX N
+LI N")
+me9_ct<-str_split(me9_ct, '\n')[[1]]
+me9_ct<-unlist(me9_ct)
+```
+
+```{r, echo=F}
+era_gf<-as.matrix(era_g[rownames(era_g) %in% rownames(me9_g),])
+era_gf<-era_gf[,era_ct]
+colnames(era_gf)<-lapply(colnames(era_gf), function(x) paste("C", x, sep="-"))
+me9_gf<-as.matrix(me9_g[rownames(me9_g) %in% rownames(era_g),])
+me9_gf<-me9_gf[,me9_ct]
+colnames(me9_gf)<-lapply(colnames(me9_gf), function(x) paste("M", x, sep="-"))
+table(rownames(me9_gf) %in% rownames(era_gf))
+#Step7: Merge Expression Tables
+ geTable = merge(era_gf,me9_gf, by='row.names', all=F)
+  rownames(geTable) = geTable$Row.names
+  geTable = geTable[,2:ncol(geTable)]
+pb_mc.cor<-cor(geTable, method = "spearman")
+pb_mc.cor
+```
+
+```{r, echo=F}
+#8b:  Shuffle data
+  shuffled.cor.list = list()
+  pb_mc   <- txtProgressBar(1, 100, style=3)
+nPermutations <- 100
+  for (i in 1:nPermutations){
+    shuffled = apply(geTable[,1:ncol(era_gf)],1,sample)
+    shuffled2 = apply(geTable[,(ncol(era_gf)+1):ncol(geTable)],1,sample)
+    shuffled = cbind(t(shuffled),t(shuffled2))
+    shuffled.cor = cor(shuffled,method="spearman")
+    shuffled.cor.list[[i]] = shuffled.cor
+    rm(list=c('shuffled','shuffled2','shuffled.cor'))
+    if ((i %% 100) ==0){
+      setTxtProgressBar(pb_mc, (i*100)/nPermutations)
+    }
+  }
+  
+  p.value.table = matrix(ncol=ncol(geTable), nrow = ncol(geTable))
+  rownames(p.value.table) = colnames(geTable)
+  colnames(p.value.table) = colnames(geTable)
+  
+  shuffled.mean.table = matrix(ncol=ncol(geTable), nrow = ncol(geTable))
+  rownames(shuffled.mean.table) = colnames(geTable)
+  colnames(shuffled.mean.table) = colnames(geTable)
+  
+  a = combn(1:ncol(geTable),2)
+  for (i in 1:ncol(a)){
+    cor.scores = sapply(shuffled.cor.list,"[",a[1,i],a[2,i])
+    shuffled.mean.table[a[1,i],a[2,i]] = mean(cor.scores)
+    shuffled.mean.table[a[2,i],a[1,i]] = mean(cor.scores)
+    p.value = mean(abs(cor.scores)>=abs(pb_mc.cor[a[1,i],a[2,i]]))
+    p.value.table[a[1,i],a[2,i]] = p.value
+    p.value.table[a[2,i],a[1,i]] = p.value
+    rm(list=c('cor.scores','p.value'))
+    setTxtProgressBar(pb_mc, (i*100)/ncol(a))
+  }
+p.value.table[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)]
+  neg.log10.p = -log10(p.value.table)
+```
+```{r}
+  #step9 "Overlap in Markers"
+  #for all pairs of cell-types generate list of genes that are at least 1.5x avg in both cells
+  
+  #from above a = combn(1:ncol(geTable),2)
+  marker.overlap.list = list()
+  for (i in 1:ncol(a)){
+    datasubset = cbind(geTable[,a[1,i]],geTable[,a[2,i]])
+    markers = rownames(geTable[datasubset[,1]>1.5 & datasubset[,2]>1.5,])
+    marker.overlap.list[[i]] = markers
+    names(marker.overlap.list)[i] = paste(colnames(geTable)[a[1,i]], colnames(geTable)[a[2,i]],sep='_')
+    rm(list=c('datasubset','markers'))
+  }
+```
+
+```{r}
+colnames(pb_mc.cor)<-str_sub(colnames(pb_mc.cor), start = 3)
+rownames(pb_mc.cor)<-str_sub(rownames(pb_mc.cor), start = 3)
+```
+
+
+```{r, fig.height=7, fig.width=10, echo=F}
+#plot it 
+corrplot::corrplot(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)], order="original", tl.pos="lt", method="color", tl.col="black",cl.lim=c(min(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)]),max(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)])), is.corr=F,tl.cex=0.7, sig.level=(0.05),insig="pch", pch=5, p.mat=p.value.table[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)], pch.cex=0.25,pch.col="black",mar=c(3,1,5,1),cl.align.text="l")
+corrplot::corrplot(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)], order="original", tl.pos="lt", method="color", tl.col="black",cl.lim=c(min(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)]),max(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)])), is.corr=F,tl.cex=0.7, sig.level=(0.05),insig="pch", pch=5, p.mat=p.value.table[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)], pch.cex=0.25,pch.col="black",mar=c(3,1,5,1),cl.align.text="l", addgrid.col = "black")
+```
+```{r, fig.height=7, fig.width=10, echo=F}
+#plot it 
+pdf("corr_me9_vs_ce3_subsetprev.pdf")
+corrplot::corrplot(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)], order="original", tl.pos="lt", method="color", tl.col="black",cl.lim=c(min(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)]),max(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)])), is.corr=F,tl.cex=0.7, sig.level=(0.05),insig="pch", pch=5, p.mat=p.value.table[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)], pch.cex=0.25,pch.col="black",mar=c(3,1,5,1),cl.align.text="l")
+corrplot::corrplot(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)], order="original", tl.pos="lt", method="color", tl.col="black",cl.lim=c(min(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)]),max(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)])), is.corr=F,tl.cex=0.7, sig.level=(0.05),insig="pch", pch=5, p.mat=p.value.table[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)], pch.cex=0.25,pch.col="black",mar=c(3,1,5,1),cl.align.text="l", addgrid.col = "black")
+dev.off()
+```
+```{r, fig.height=7, fig.width=10, echo=F}
+#plot it 
+p_inv<-1-p.value.table
+corrplot::corrplot(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)], order="original", tl.pos="lt", method="color", tl.col="black",cl.lim=c(min(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)]),max(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)])), is.corr=F,tl.cex=0.7, sig.level=(0.95),insig="pch", pch=5, p.mat=p_inv[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)], pch.cex=0.15,pch.col="black",mar=c(3,1,5,1),cl.align.text="l")
+pdf("corr_me9_vs_ce3_subsetprev_inv.pdf")
+corrplot::corrplot(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)], order="original", tl.pos="lt", method="color", tl.col="black",cl.lim=c(min(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)]),max(pb_mc.cor[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)])), is.corr=F,tl.cex=0.7, sig.level=(0.95),insig="pch", pch=5, p.mat=p_inv[1:ncol(era_gf), (ncol(era_gf)+1):ncol(pb_mc.cor)], pch.cex=0.15,pch.col="black",mar=c(3,1,5,1),cl.align.text="l")
+dev.off()
+```
+
+```{r, fig.height=7, fig.width=15, echo=F}
+pvclust.pb_mc.cor<-pvclust(pb_mc.cor, nboot = 1000)
+pvclust.pb_mc.cor
+plot(pvclust.pb_mc.cor)
+pb_mc.cor.dist<-dist(pb_mc.cor)
+plot(hclust(pb_mc.cor.dist))
+```
+

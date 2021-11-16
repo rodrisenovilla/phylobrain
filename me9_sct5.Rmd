@@ -1,0 +1,253 @@
+---
+title: "Rueda-Alaña Chick Early Data"
+author: "Rodrigo Senovilla Ganzo"
+date: "6/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(Matrix)
+library(glmGamPoi)
+library(sctransform)
+library(limma)
+library(clustree)
+library(pvclust)
+library(readr)
+library(readxl)
+library(plyr)
+```
+
+```{r, echo=FALSE}
+me9_sct5<-readRDS("me9_sct5i.rds")
+```
+
+```{r , echo=FALSE}
+me9_sct5 <- RunPCA(me9_sct5, npcs = 50, verbose = FALSE)
+print(me9_sct5[["pca"]], dims = 1:5, nfeatures = 5)
+VizDimLoadings(me9_sct5, dims = 1:2, reduction = "pca")
+
+```
+
+
+```{r , echo=FALSE}
+DimHeatmap(me9_sct5, dims = 1, cells = 500, balanced = TRUE)
+
+```
+This representation allows to explore primary sources of heterogenity in the dataset
+
+```{r , echo=FALSE}
+DimHeatmap(me9_sct5, dims = 15:30, cells = 500, balanced = TRUE)
+for (i in 45:50) {
+print(DimHeatmap(me9_sct5, dims = i, cells = 500, balanced = TRUE))}
+
+```
+
+
+## Alternative heuristic method for obtaining dimensionality
+
+```{r , echo=FALSE}
+ElbowPlot(me9_sct5, ndims = 50)
+
+```
+
+It is weird because it seems that all PC are important to the analysis regardin JackStraw, but considering Elbowplot, they are not!
+
+## Cluster the cells 
+
+Using different distance approach (euclidian distance in PCs)
+An example for showing characterization of five initial cells
+
+```{r , echo=FALSE}
+resolution.range<-c(0.0,0.2,0.4,0.6,0.8,1,1.5,2,2.1,2.2,2.3,2.4,2.5,2.6,2.7,2.8,2.9,3,3.1,3.2,3.3,3.4)
+me9_sct5 <- FindNeighbors(me9_sct5, dims = 1:50)
+me9_sct5 <- Seurat::FindClusters(object = me9_sct5, resolution = resolution.range)
+me9_sct5 <- RunUMAP(me9_sct5, dims = 1:50, resolution = resolution.range)
+me9_sct5@meta.data
+```
+```{r , echo=FALSE}
+Idents(me9_sct5)<-"integrated_snn_res.3.2"
+DimPlot(me9_sct5, label = T)+NoLegend()
+```
+
+
+```{r , echo=FALSE}
+Idents(me9_sct5)<-"me9_sct4_res2.5"
+DimPlot(me9_sct5, label = T)+NoLegend()
+```
+
+
+
+Gene markers
+## Finding differentially expressed features (Cluster biomarkers) 
+
+All cluster markers
+
+
+```{r, echo=FALSE}
+curated_list<-read_xlsx("../Curated Gene Markers List.xlsx")
+Idents(me9_sct5)<- "integrated_snn_res.3.2"
+me9_sct5.markers <- FindAllMarkers(me9_sct5, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+me9_sct5.top10 <- me9_sct5.markers %>% group_by(cluster) %>% top_n(n = 15, wt = avg_log2FC)
+me9_sct5.annot<- merge(me9_sct5.top10, curated_list, by.x= "gene") 
+me9_sct5.annot<- rbind.fill(me9_sct5.annot, me9_sct5.top10[!(me9_sct5.top10$gene %in% me9_sct5.annot$gene),]) %>% arrange(cluster) %>% relocate(gene, .after= cluster)
+me9_sct5.annot
+```
+
+## Visualization of gene expression across clusters
+
+
+
+```{r, echo=F}
+X<- me9_sct5.markers %>% group_by(cluster) %>% top_n(n = 15, wt = avg_log2FC) %>% filter(cluster==30)
+for(i in 1:length(X$gene)){
+  print(FeaturePlot(me9_sct5, X$gene[i]))
+}
+```
+
+```{r, echo=F}
+DefaultAssay(me9_sct5)<-"integrated"
+Idents(me9_sct5)<-"integrated_snn_res.3.2"
+me9_sct5.vs.markers <- FindMarkers(me9_sct5, ident.1 = 33, ident.2 = 0, only.pos = T, min.pct = 0.25, logfc.threshold = 0.25)
+Y <- me9_sct5.vs.markers[1:70,]
+for(i in 1:length(rownames(Y))) {
+  print(FeaturePlot(me9_sct5, rownames(Y[i,])))
+}
+```
+
+```{r, echo=F}
+DefaultAssay(me9_sct5)<-"SCT"
+H1<-rownames(me9_sct5[["SCT"]]@data)[grep("^FGF8", rownames(me9_sct5[["SCT"]]@data))]
+for(i in 1:length(H1)){
+  print(FeaturePlot(me9_sct5, features = H1[i]))}
+```
+```{r, echo=F}
+MiceMarkers <- read.csv("../MiceMarkers.csv", sep = ";")
+MiceMarkers <- c(MiceMarkers$X.)
+MiceMarkers<-MiceMarkers %>% str_split(", ") %>% unlist()
+DefaultAssay(me9_sct5)<-"SCT"
+for(i in 1:length(MiceMarkers)){
+  print(FeaturePlot(me9_sct5, features = MiceMarkers[i]))}
+```
+
+```{r, echo=F}
+DefaultAssay(me9_sct5)<-"SCT"
+FeaturePlot(me9_sct5, features = "DMRTA")
+RidgePlot(me9_sct5, features = "RPL26", group.by = "Phase")
+me9_sct5[["integrated"]]@var.features[grep("NKX", me9_sct5[["integrated"]]@var.features)]
+```
+## Subset neurons
+
+```{r, warning=F}
+Idents(me9_sct5)<- "integrated_snn_res.3.2"
+me9_sct5.subset <- subset(me9_sct5, idents = c(19, 6, 25, 0, 33))
+me9_sct5.subset <- RunPCA(me9_sct5.subset, features = VariableFeatures(object = me9_sct5.subset))
+me9_sct5.subset <- FindNeighbors(me9_sct5.subset, dims = 1:50)
+me9_sct5.subset <- FindClusters(me9_sct5.subset, resolution = resolution.range)
+me9_sct5.subset <- RunUMAP(me9_sct5.subset, dims = 1:50, resolution = resolution.range)
+```
+```{r}
+Idents(me9_sct5.subset)<-"integrated_snn_res.0.4"
+FeaturePlot(me9_sct5.subset, features = c("TUBB6","COL1A1", "FABP7"))
+DimPlot(me9_sct5.subset, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+Idents(me9_sct5.subset)<-"me9_sct5_res2.8"
+DimPlot(me9_sct5.subset, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+```
+
+```{r, echo=F}
+Idents(me9_sct5.subset)<-"integrated_snn_res.0.4"
+me9_sct5.subset.markers <- FindAllMarkers(me9_sct5.subset, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 2)
+me9_sct5.subset.top10 <- me9_sct5.subset.markers %>% group_by(cluster) %>% top_n(n = 30, wt = avg_log2FC)
+me9_sct5.subset.annot<- merge(me9_sct5.subset.top10, curated_list, by.x= "gene") 
+me9_sct5.subset.annot<- rbind.fill(me9_sct5.subset.annot, me9_sct5.subset.top10[!(me9_sct5.subset.top10$gene %in% me9_sct5.subset.annot$gene),]) %>% arrange(cluster) %>% relocate(gene, .after= cluster)
+me9_sct5.subset.annot
+```
+
+
+```{r, echo=F}
+for(i in 1:length(me9_sct5.subset.top10$gene)) {
+  print(FeaturePlot(me9_sct5.subset, me9_sct5.subset.top10$gene[[i]]))
+}
+```
+
+```{r, echo=F}
+for(i in 1:length(me9_sct5.subset.top10$gene)) {
+  print(FeaturePlot(me9_sct5, me9_sct5.subset.top10$gene[[i]]))
+}
+```
+```{r,  echo=FALSE}
+top10 <- me9_sct5.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+DoHeatmap(me9_sct5, features = top10$gene) + NoLegend() + theme(text = element_text(size = 20))
+```
+
+## Cluster annnotation
+
+```{r , echo=FALSE}
+me9_sct5<-readRDS("./me9_sct5f.rds")
+
+Idents(me9_sct5)<-"integrated_snn_res.2.8"
+DimPlot(me9_sct5, label = T)+NoLegend()
+new.cluster.ids <-c("aMB", "TEL1", "TEL2", "OV", "P1-2", "abR1-2", "abR3", "aR1", "HEM",  "aR4", "aIT", "aR3", "bR3-5", "SPAL", "paIT", "LHX N", "HB-FP", "bMB", "TAL2 N", "HB-RP", "P3", "bR0-2", "aR5", "IT-FP", "MB-FP", "tHT", "RL", "MB/DIEN-RP", "abR4", "pHT", "MOT N", "LI N", "MSX3 N", "ATO", "AMP", "EGL", "aR2")
+names(new.cluster.ids) <- levels(me9_sct5)
+me9_sct5 <- RenameIdents(me9_sct5, new.cluster.ids)
+me9_sct5[["me9_sct5_res2.8"]]<-Idents(me9_sct5)
+p1<-DimPlot(me9_sct5, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+p1
+```
+```{r}
+pdf("UMAP_me9_sct5.pdf")
+p1
+dev.off()
+```
+
+```{r , echo=FALSE}
+saveRDS(me9_sct5, file = "./me9_sct5f.rds")
+```
+
+##SUBSETTING
+
+
+
+{r , echo=FALSE}
+Idents(me9_sct5)<-"integrated_snn_res.3"
+DimPlot(me9_sct5, label=T)
+me9_sct5 <- subset(me9_sct5, idents = c(35), invert = TRUE)
+```
+
+```{r , echo=FALSE}
+VlnPlot(me9_sct5, features = "nFeature_RNA")
+VlnPlot(me9_sct5, features = "nCount_RNA")
+VlnPlot(me9_sct5, features = "percent.mt")
+plot1 <- FeatureScatter(me9_sct5, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(me9_sct5, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+```{r, echo=F}
+library(readr)
+cc.fer <- read_delim("../Cellcycle/fer_genes.csv", 
+    ";", escape_double = FALSE, trim_ws = TRUE)
+s.genes <- unique(toupper(c(cc.genes$s.genes,cc.fer$`Phase S`)))
+g2m.genes <- unique(toupper(c(cc.genes$g2m.genes,cc.fer$`Phase G2M`)))
+```
+
+
+To visualize the result, there are several ways to do it (VizDimReduction(), DimPlot(), and DimHeatmap())
+
+```{r}
+DefaultAssay(me9_sct5)<-"RNA"
+me9_sct5.list <- SplitObject(me9_sct5, split.by = "orig.ident")
+me9_sct5.list <- lapply(X = me9_sct5.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("percent.mt", "G2M.Score", "S.Score"))
+features <- SelectIntegrationFeatures(object.list = me9_sct5.list)
+me9_sct5.list <- PrepSCTIntegration(object.list = me9_sct5.list, anchor.features = features)
+me9_sct5.list <- lapply(X = me9_sct5.list, FUN = RunPCA, features = features)
+anchors <- FindIntegrationAnchors(object.list = me9_sct5.list, reduction = "cca", dims = 1:50, normalization.method = "SCT", anchor.features = features)
+me9_sct5 <- IntegrateData(anchorset = anchors, normalization.method = "SCT", dims = 1:50)
+```
+
+```{r , echo=FALSE}
+saveRDS(me9_sct5, file = "./me9_sct6i.rds")
+```

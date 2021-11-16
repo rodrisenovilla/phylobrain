@@ -1,0 +1,202 @@
+---
+title: "Rueda-Alaña Chick Early Data"
+author: "Rodrigo Senovilla Ganzo"
+date: "6/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(Matrix)
+library(glmGamPoi)
+library(sctransform)
+library(limma)
+
+```
+
+
+```{r , echo=FALSE}
+mouse_e9_integrate <- readRDS("me9_sct.rds")
+me9_sct1 <- subset(mouse_e9_integrate, idents = c(5, 18, 21, 23, 26, 27), invert = TRUE)
+```
+
+```{r , echo=FALSE}
+VlnPlot(me9_sct1, features = "nFeature_RNA")
+VlnPlot(me9_sct1, features = "nCount_RNA")
+VlnPlot(me9_sct1, features = "percent.mt")
+plot1 <- FeatureScatter(me9_sct1, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(me9_sct1, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+
+To visualize the result, there are several ways to do it (VizDimReduction(), DimPlot(), and DimHeatmap())
+
+
+```{r , echo=FALSE}
+me9_sct1 <- RunPCA(me9_sct1, npcs = 50, verbose = FALSE)
+print(me9_sct1[["pca"]], dims = 1:5, nfeatures = 5)
+VizDimLoadings(me9_sct1, dims = 1:2, reduction = "pca")
+
+```
+
+```{r , echo=FALSE}
+DimPlot(me9_sct1, reduction = "pca")
+
+```
+
+```{r , echo=FALSE}
+DimHeatmap(me9_sct1, dims = 1, cells = 500, balanced = TRUE)
+
+```
+This representation allows to explore primary sources of heterogenity in the dataset
+
+```{r , echo=FALSE}
+DimHeatmap(me9_sct1, dims = 15:30, cells = 500, balanced = TRUE)
+for (i in 45:50) {
+print(DimHeatmap(me9_sct1, dims = i, cells = 500, balanced = TRUE))}
+
+```
+
+
+## Alternative heuristic method for obtaining dimensionality
+
+```{r , echo=FALSE}
+ElbowPlot(me9_sct1, ndims = 50)
+
+```
+
+It is weird because it seems that all PC are important to the analysis regardin JackStraw, but considering Elbowplot, they are not!
+
+## Cluster the cells 
+
+Using different distance approach (euclidian distance in PCs)
+
+
+```{r , echo=FALSE}
+me9_sct1 <- FindNeighbors(me9_sct1, dims = 1:50)
+me9_sct1 <- FindClusters(me9_sct1, resolution = 1)
+
+```
+
+An example for showing characterization of five initial cells
+
+```{r , echo=FALSE}
+head(Idents(me9_sct1), 5)
+
+```
+
+## Non-linear dimensional reduction (UMAP/tSNE)
+
+This is the algorithm for UMAP
+
+```{r , echo=FALSE}
+me9_sct1 <- RunUMAP(me9_sct1, dims = 1:50)
+
+```
+
+and below its visualization
+
+
+
+```{r , echo=FALSE}
+DimPlot(me9_sct1, reduction = "umap")
+
+```
+This is the algorithm for tSNE
+
+```{r , echo=FALSE}
+me9_sct1 <- RunTSNE(me9_sct1, dims = 1:20)
+
+```
+
+and below its visualization
+
+
+```{r , echo=FALSE}
+DimPlot(me9_sct1, reduction = "tsne")
+
+```
+
+## Finding differentially expressed features (Cluster biomarkers) 
+
+All cluster markers
+
+
+```{r , echo=FALSE}
+me9_sct1.markers <- FindAllMarkers(me9_sct1, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+for(i in unique(me9_sct1.markers$cluster)) {
+  print(me9_sct1.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) %>% filter(cluster == i))
+}
+
+top10<-me9_sct1.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+write.csv(top10 ,"me9_sct1_top10.csv")
+
+```
+
+
+## Visualization of gene expression across clusters
+
+
+
+```{r , echo=FALSE}
+
+VlnPlot(me9_sct1, features = c("HIST1H1E"))
+
+```
+```{r , echo=FALSE}
+
+VlnPlot(me9_sct1, features = c("FGF8"))
+
+```
+
+
+```{r , echo=FALSE}
+me9_sct1.gene.DE=(me9_sct1.markers %>% group_by(cluster) %>% top_n(n = 2, wt = avg_log2FC))$gene
+for (i in 1:length(me9_sct1.gene.DE)){
+print(FeaturePlot(me9_sct1, features = me9_sct1.gene.DE[i]))}
+
+FeaturePlot(me9_sct1, features = "SLC17A6")
+```
+
+## 
+
+
+
+```{r  echo=FALSE}
+top10 <- me9_sct1.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+DoHeatmap(me9_sct1, features = top10$gene) + NoLegend()
+
+```
+
+## LEF1 
+
+
+
+```{r , echo=FALSE}
+new.cluster.ids <- c(0:(length(unique(me9_sct1$seurat_clusters))-1))
+names(new.cluster.ids) <- levels(me9_sct1)
+me9_sct1 <- RenameIdents(me9_sct1, new.cluster.ids)
+p1<-DimPlot(me9_sct1, reduction = "umap", label = TRUE, pt.size = 0.5) 
+p2<-DimPlot(me9_sct1, reduction = "tsne", label = TRUE, pt.size = 0.5) + NoLegend()
+p1
+c("MES","DTEL","HB","DMB","HB","DIEN","SUBPAL","WEIRD","ERY","ROOF","MES/FLOOR","ROM","ROM","SUBPAL","PRET","ITSHMUS","MB","DMB","DNTKNOW", "NCREST", "CHOROID", "MES/FLOOR","NOSENSE","PLATELETS")
+```
+```{r , echo=FALSE}
+VlnPlot(me9_sct1, features = "nFeature_RNA")
+VlnPlot(me9_sct1, features = "nCount_RNA")
+VlnPlot(me9_sct1, features = "percent.mt")
+plot1 <- FeatureScatter(me9_sct1, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(me9_sct1, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+```{r , echo=FALSE}
+saveRDS(me9_sct1, file = "./me9_sct1.rds")
+```
+
+

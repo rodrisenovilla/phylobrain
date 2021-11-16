@@ -1,0 +1,382 @@
+---
+title: "Rueda-Alaña Chick Early Data"
+author: "Rodrigo Senovilla Ganzo"
+date: "6/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(Matrix)
+library(glmGamPoi)
+library(sctransform)
+library(limma)
+library(clustree)
+library(pvclust)
+library(Hmisc)
+library(corrplot)
+library(ggcorrplot)
+library(stringr)
+library(biomaRt)
+```
+
+## 1to1 otrhologs
+
+Obtain orthologs names, the substitution step will be done at the end though
+
+## Mouse genes 1to1
+
+```{r cars}
+if(exists("ensembl")==F){
+ensembl<-useMart("ensembl")}
+if(exists("mouse")==F){
+mouse<-useDataset("mmusculus_gene_ensembl", mart=ensembl)}
+attributes = c("external_gene_name", "ensembl_gene_id", "ggallus_homolog_ensembl_gene","ggallus_homolog_perc_id_r1", "ggallus_homolog_orthology_type", "ggallus_homolog_subtype", "ggallus_homolog_perc_id")
+mouse_genes <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"), mart = mouse)
+for(i in 1:length(mouse_genes[,1])){
+  if(mouse_genes[i,1]==""){
+    mouse_genes[i,1]<-mouse_genes[i,2]
+  }
+}
+orth.mouse = getBM(attributes, filters="with_ggallus_homolog",values=TRUE, mart = mouse, bmHeader=FALSE)
+orth.mouse<-orth.mouse[which(orth.mouse$ggallus_homolog_orthology_type=="ortholog_one2one"),]
+ensembl.mouse<- orth.mouse[,2]
+external.mouse<-orth.mouse[,1]
+rownames(orth.mouse)<-ensembl.mouse
+TFdata_mouse <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"),filters = 'go', values = c('GO:0006366', 'GO:0000981', 'GO:0003700', 'GO:0006383', 'GO:0000995', 'GO:0001228', 'GO:0001227'), mart = mouse)
+```
+
+## Chicken genes 1to1
+
+```{r cars}
+if(exists("ensembl")==F){
+ensembl<-useMart("ensembl")}
+datasets <- listDatasets(ensembl)
+if(exists("chicken")==F){
+chicken<-useDataset("ggallus_gene_ensembl", mart=ensembl)}
+attributes = c("external_gene_name", "ensembl_gene_id", "mmusculus_homolog_ensembl_gene","mmusculus_homolog_perc_id_r1", "mmusculus_homolog_orthology_type", "mmusculus_homolog_subtype", "mmusculus_homolog_perc_id")
+chicken_genes <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"), mart = chicken)
+for(i in 1:length(chicken_genes[,1])){
+  if(chicken_genes[i,1]==""){
+    chicken_genes[i,1]<-chicken_genes[i,2]
+  }
+}
+orth.chicken = getBM(attributes, filters="with_mmusculus_homolog",values=TRUE, mart = chicken, bmHeader=FALSE)
+orth.chicken<-orth.chicken[which(orth.chicken$mmusculus_homolog_orthology_type=="ortholog_one2one"),]
+ensembl.chicken<- orth.chicken[,2]
+external.chicken<-orth.chicken[,1]
+rownames(orth.chicken)<-ensembl.chicken
+TFdata_chicken <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"),filters = 'go', values = c('GO:0006366', 'GO:0000981', 'GO:0003700', 'GO:0006383', 'GO:0000995', 'GO:0001228', 'GO:0001227'), mart = chicken)
+```
+
+
+
+#Indentities
+
+This step will be removed in the future, as the identities will be well stablished beforehand and we will know what each cluster stands for. 
+
+```{r , echo=FALSE}
+me9 <- readRDS("../mouse_e9/me9_sct5f.rds")
+era <-readRDS("../chicken_e3/ce3_4f.rds")
+```
+
+```{r , echo=FALSE}
+me9[['seurat_clusters']]<-me9[['me9_sct5_res2.8']]
+era[['seurat_clusters']]<-era[['ce3_4']]
+Idents(me9) <- "seurat_clusters"
+Idents(era) <- "seurat_clusters"
+```
+
+```{r cars, warning=FALSE}
+era_orth<-era
+era.data<-GetAssayData(object = era, assay = "RNA")
+era.data_ensembl<-merge(x=chicken_genes[,1:2], y=era.data, by.x= "external_gene_name", by.y= "row.names")
+era.data_orth<-merge(x=orth.chicken[,2:3], y=era.data_ensembl, by.x= "ensembl_gene_id", by.y= "ensembl_gene_id")
+era.data_orth<-era.data_orth[,-c(1,3)]
+era.data_orth<-merge(x=mouse_genes, y=era.data_orth, by.x = "ensembl_gene_id", by.y = "mmusculus_homolog_ensembl_gene")
+era.data_orth$external_gene_name<-sub('[.]','-',make.names(era.data_orth$external_gene_name, unique=T))
+rownames(era.data_orth)<-toupper(era.data_orth$external_gene_name)
+era.data_orth<-era.data_orth[,-c(1,2)]
+era.data_orth<-Matrix(as.matrix(era.data_orth),sparse=TRUE)
+mouse_gene_assay <- CreateAssayObject(era.data_orth)
+era_orth[['RNA']] <- mouse_gene_assay
+```
+
+
+##Integration of datasets
+
+```{r , echo=FALSE}
+DefaultAssay(era_orth)<-"RNA"
+chick.list <- SplitObject(era_orth, split.by="orig.ident")
+chick.list <- lapply(X = chick.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("S.Score", "G2M.Score","percent.mt", "z.Score", "w.Score", "percent.hist"))
+features <- SelectIntegrationFeatures(object.list = chick.list)
+chick.list <- PrepSCTIntegration(object.list = chick.list, anchor.features = features)
+chick.list <- lapply(X = chick.list, FUN = RunPCA, features = features)
+anchors <- FindIntegrationAnchors(object.list = chick.list, reference = c(1, 2), reduction = "cca", dims = 1:50, normalization.method = "SCT", anchor.features = features)
+era_orth <- IntegrateData(anchorset = anchors, normalization.method = "SCT", dims = 1:50)
+```
+
+
+```{r cars, warning=FALSE}
+me9_orth<-me9
+me9.data<-GetAssayData(object = me9, assay = "RNA")
+orth.mouse[,1]<-toupper(orth.mouse[,1])
+me9.data_orth<-merge(x=orth.mouse[,1:2], y=me9.data, by.x= "external_gene_name", by.y= "row.names")
+rownames(me9.data_orth)<-me9.data_orth$external_gene_name
+me9.data_orth<-me9.data_orth[,-c(1,2)]
+me9.data_orth<-Matrix(as.matrix(me9.data_orth),sparse=TRUE)
+mouse_gene_assay <- CreateAssayObject(me9.data_orth)
+me9_orth[['RNA']] <- mouse_gene_assay
+```
+
+```{r}
+DefaultAssay(me9_orth)<-"RNA"
+me9_orth.list <- SplitObject(me9_orth, split.by = "orig.ident")
+me9_orth.list <- lapply(X = me9_orth.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("percent.mt", "G2M.Score", "S.Score"))
+features <- SelectIntegrationFeatures(object.list = me9_orth.list)
+me9_orth.list <- PrepSCTIntegration(object.list = me9_orth.list, anchor.features = features)
+me9_orth.list <- lapply(X = me9_orth.list, FUN = RunPCA, features = features)
+anchors <- FindIntegrationAnchors(object.list = me9_orth.list, reduction = "cca", dims = 1:50, normalization.method = "SCT", anchor.features = features)
+me9_orth <- IntegrateData(anchorset = anchors, normalization.method = "SCT", dims = 1:50)
+```
+
+# TRANSFERS
+
+```{r}
+me9_orth <- RunPCA(me9_orth, npcs = 50, verbose = FALSE, VariableFeatures(me9_orth),assay = "SCT")
+me9_orth <- RunUMAP(me9_orth, dims = 1:50)
+era_orth <- RunPCA(era_orth, npcs = 50, verbose = FALSE, VariableFeatures(era_orth),assay = "SCT")
+era_orth <- RunUMAP(era_orth, dims = 1:50)
+```
+
+
+
+#Correlation matrix
+
+Although the each species matrix only includes ortholog, we keep for comparisons only those genes presents in both datasets. 
+
+#Chicken vs Mice
+
+```{r, echo=F}
+era_ct<- c(
+"MB/DIEN-RP
+HB-RP
+HEM
+AMP
+OV
+aTEL
+bTEL
+tHT
+pHT
+P3
+aP2
+bP2
+P1
+PG
+aIT
+bMB
+pabMB
+a'abMB
+aMB
+pIT
+RL
+aR1-2
+aR3-8
+abR0-8
+bR0-8
+DIEN-FP
+MB-FP
+IT-FP
+HB-aFP
+HB-bFP
+TAL1 N
+MOT N
+TAL2 N
+LHX9 N
+LHX3 N
+SPAL N
+EI N
+LI N"
+)
+era_ct<-str_split(era_ct, '\n')[[1]]
+era_ct<-unlist(era_ct)
+```
+
+```{r, echo=F}
+me9_ct<- c(
+"MB/DIEN-RP
+HB-RP
+HEM
+AMP
+OV
+TEL1
+TEL2
+SPAL
+tHT
+ATO
+pHT
+P3
+P1-2
+aIT
+aMB
+bMB
+paIT
+RL
+EGL
+aR1
+aR2
+aR3
+aR4
+aR5
+abR1-2
+abR3
+abR4
+bR0-2
+bR3-5
+MB-FP
+IT-FP
+HB-FP
+MOT N
+TAL2 N
+MSX3 N
+LHX N
+LI N")
+me9_ct<-str_split(me9_ct, '\n')[[1]]
+me9_ct<-unlist(me9_ct)
+```
+
+
+# Mice in chicken
+
+```{r , fig.height=10, fig.width=15, echo=FALSE}
+Idents(me9_orth) <- "seurat_clusters"
+Idents(era_orth) <- "seurat_clusters"
+pb_anchors_minc <- FindTransferAnchors(query = me9_orth, reference = era_orth, dims = 1:50, reference.reduction = "pca", normalization.method = "SCT")
+predictions <- TransferData(anchorset = pb_anchors_minc, refdata = era_orth$seurat_clusters, dims = 1:50)
+me9_orth <- AddMetaData(me9_orth, metadata = predictions)
+table(me9_orth$seurat_clusters,me9_orth$predicted.id)
+era_orth <- RunUMAP(era_orth, dims = 1:50, reduction = "pca", return.model = TRUE)
+me9_orth <- MapQuery(anchorset = pb_anchors_minc, reference = era_orth, query = me9_orth, refdata = list(celltype = "seurat_clusters"), reference.reduction = "pca", reduction.model = "umap")
+p1_minc <- DimPlot(era_orth, reduction = "umap", group.by = "seurat_clusters", label = TRUE, label.size = 3, repel = TRUE) + ggtitle("Reference Mouse Annotations")+NoLegend()
+me9_orth[["ref.umap"]]@cell.embeddings[,1]<-me9_orth[["ref.umap"]]@cell.embeddings[,1]*(-1)
+p2_minc <- DimPlot(me9_orth, reduction = "ref.umap", group.by = "predicted.celltype", label = TRUE, label.size = 3, repel = TRUE) + ggtitle("Predicted Mouse Cell Types for Chicken Cells")+NoLegend()
+p3_minc <- DimPlot(me9_orth, reduction = "ref.umap", group.by = "seurat_clusters", label = TRUE, label.size = 3, repel = TRUE) + ggtitle("Original Chicken Cell Types Transferred")+NoLegend()
+```
+
+
+```{r, }
+p1_minc+p2_minc+p3_minc
+pdf("mice_ref_minc.pdf")
+p1_minc
+dev.off()
+pdf("predicted_chick_minc.pdf")
+p2_minc
+dev.off()
+pdf("original_minc.pdf")
+p3_minc
+dev.off()
+```
+
+
+```{r, echo=F, fig.width=12, fig.height=12}
+matches_minc<-as.matrix(table(me9_orth$seurat_clusters, me9_orth$predicted.id))
+for(i in 1:nrow(matches_minc)){
+  matches_minc[i,]<-matches_minc[i,]/sum(matches_minc[i,])
+}
+dim(matches_minc)
+matches_minc<-matches_minc[me9_ct,]
+lacking_c<-matrix(dimnames = list(me9_ct,era_ct[which(era_ct %nin% colnames(matches_minc))]), c(rep(0,length(me9_ct))))
+matches_minc<-cbind(matches_minc, lacking_c)
+matches_minc<-matches_minc[,era_ct]
+dim(matches_minc)
+pdf("matches_minc.pdf")
+corrplot(matches_minc, method="shade", tl.col = "black", col.lim = c(0,1), col=colorRampPalette(c("blue","white","dark green"))(200))
+corrplot(matches_minc, method="shade", tl.col = "black", col.lim = c(0,1))
+corrplot(matches_minc, method="shade", tl.col = "black", col.lim = c(0,1), addgrid.col = "black")
+dev.off()
+?corrplot
+#test 
+## specialized the insignificant value according to the significant level
+ggcorrplot(matches_minc, hc.order=T, lab =TRUE, insig = "blank")+ scale_fill_gradient2(limit =c(0,1), low = "white", high =  "black")
+```
+
+# Chicken in mice
+
+```{r , fig.height=10, fig.width=15, echo=FALSE}
+Idents(me9_orth) <- "seurat_clusters"
+Idents(era_orth) <- "seurat_clusters"
+pb_anchors_cinm <- FindTransferAnchors(query = era_orth, reference = me9_orth, dims = 1:50, reference.reduction = "pca", normalization.method = "SCT")
+predictions <- TransferData(anchorset = pb_anchors_cinm, refdata = me9_orth$seurat_clusters, dims = 1:50)
+era_orth <- AddMetaData(era_orth, metadata = predictions)
+table(era_orth$seurat_clusters,era_orth$predicted.id)
+me9_orth <- RunUMAP(me9_orth, dims = 1:50, reduction = "pca", return.model = TRUE)
+era_orth <- MapQuery(anchorset = pb_anchors_cinm, reference = me9_orth, query = era_orth, refdata = list(celltype = "seurat_clusters"), reference.reduction = "pca", reduction.model = "umap")
+p1_cinm <- DimPlot(me9_orth, reduction = "umap", group.by = "seurat_clusters", label = TRUE, label.size = 3, repel = TRUE) + ggtitle("Reference Chicken Annotations")+NoLegend()
+p2_cinm <- DimPlot(era_orth, reduction = "ref.umap", group.by = "predicted.celltype", label = TRUE, label.size = 3, repel = TRUE) + ggtitle("Predicted Chicken Cell Types for Mouse Cells")+NoLegend()
+p3_cinm <- DimPlot(era_orth, reduction = "ref.umap", group.by = "seurat_clusters", label = TRUE, label.size = 3, repel = TRUE) + ggtitle("Original Mouse Cell Types Transferred")+NoLegend()
+```
+
+```{r, echo=F}
+p1_cinm+p2_cinm+p3_cinm
+pdf("chicken_ref_cinm.pdf")
+p1_cinm
+dev.off()
+pdf("predicted_mouse_cinm.pdf")
+p2_cinm
+dev.off()
+pdf("original_cinm.pdf")
+p3_cinm
+dev.off()
+```
+
+```{r, echo=F, fig.width=12, fig.height=12}
+matches_cinm<-as.matrix(table(era_orth$seurat_clusters,era_orth$predicted.id))
+for(i in 1:nrow(matches_cinm)){
+  matches_cinm[i,]<-matches_cinm[i,]/sum(matches_cinm[i,])
+}
+dim(matches_cinm)
+matches_cinm<-matches_cinm[era_ct,]
+n<-length(which(me9_ct %nin% colnames(matches_cinm)))
+lacking_c<-matrix(rep(rep(0,length(era_ct)), n), ncol = n, dimnames = list(era_ct, me9_ct[which(me9_ct %nin% colnames(matches_cinm))]))
+matches_cinm<-cbind(matches_cinm, lacking_c)
+matches_cinm<-matches_cinm[,me9_ct]
+dim(matches_cinm)
+corrplot(matches_cinm, method="shade", tl.col = "black", col.lim = c(0,1), col=colorRampPalette(c("blue","white","dark green"))(200))
+corrplot(matches_cinm, method="shade", tl.col = "black", col.lim = c(0,1), addgrid.col = "black")
+```
+
+```{r}
+pdf("matches_cinm.pdf")
+corrplot(matches_cinm, method="shade", tl.col = "black", col.lim = c(0,1), col=colorRampPalette(c("blue","white","dark green"))(200))
+corrplot(matches_cinm, method="shade", tl.col = "black", col.lim = c(0,1), addgrid.col = "black")
+dev.off()
+```
+
+#test 
+## specialized the insignificant value according to the significant level
+ggcorrplot(matches_cinm, hc.order=T, lab =TRUE, insig = "blank")+ scale_fill_gradient2(limit =c(0,1), low = "white", high =  "black")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
