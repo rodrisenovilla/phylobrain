@@ -1,0 +1,352 @@
+---
+title: "Rueda-Alaña Chick Early Data"
+author: "Rodrigo Senovilla Ganzo"
+date: "6/4/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(Seurat)
+library(SeuratObject)
+library(patchwork)
+library(Matrix)
+library(glmGamPoi)
+library(sctransform)
+library(limma)
+library(clustree)
+library(pvclust)
+library(Hmisc)
+library(corrplot)
+library(ggcorrplot)
+library(stringr)
+library(biomaRt)
+library(tidyverse)
+```
+
+## 1to1 otrhologs
+
+Obtain orthologs names, the substitution step will be done at the end though
+
+## Mouse genes 1to1
+
+```{r cars}
+if(exists("ensembl")==F){
+ensembl<-useMart("ensembl")}
+datasets <- listDatasets(ensembl)
+if(exists("mouse")==F){
+mouse<-useDataset("mmusculus_gene_ensembl", mart=ensembl)}
+attributes = c("external_gene_name", "ensembl_gene_id", "ggallus_homolog_ensembl_gene","ggallus_homolog_perc_id_r1", "ggallus_homolog_orthology_type", "ggallus_homolog_subtype", "ggallus_homolog_perc_id")
+mouse_genes <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"), mart = mouse)
+for(i in 1:length(mouse_genes[,1])){
+  if(mouse_genes[i,1]==""){
+    mouse_genes[i,1]<-mouse_genes[i,2]
+  }
+}
+orth.mouse = getBM(attributes, filters="with_ggallus_homolog",values=TRUE, mart = mouse, bmHeader=FALSE)
+for(i in 1:length(orth.mouse[,1])){
+  if(orth.mouse[i,1]==""){
+    orth.mouse[i,1]<-orth.mouse[i,2]
+  }
+}
+orth.mouse<-orth.mouse[which(orth.mouse$ggallus_homolog_orthology_type=="ortholog_one2one"),]
+ensembl.mouse<- orth.mouse[,2]
+external.mouse<-orth.mouse[,1]
+rownames(orth.mouse)<-ensembl.mouse
+TFdata_mouse <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"),filters = 'go', values = c('GO:0006366', 'GO:0000981', 'GO:0003700', 'GO:0006383', 'GO:0000995', 'GO:0001228', 'GO:0001227'), mart = mouse)
+```
+
+## zebrafish genes 1to1
+
+```{r cars}
+if(exists("ensembl")==F){
+ensembl<-useMart("ensembl")}
+datasets <- listDatasets(ensembl)
+if(exists("zebrafish")==F){
+zebrafish<-useDataset("drerio_gene_ensembl", mart=ensembl)}
+attributes = c("external_gene_name", "ensembl_gene_id", "mmusculus_homolog_ensembl_gene","mmusculus_homolog_perc_id_r1", "mmusculus_homolog_orthology_type", "mmusculus_homolog_subtype", "mmusculus_homolog_perc_id")
+zebrafish_genes <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"), mart = zebrafish)
+for(i in 1:length(zebrafish_genes[,1])){
+  if(zebrafish_genes[i,1]==""){
+    zebrafish_genes[i,1]<-zebrafish_genes[i,2]
+  }
+}
+orth.zebrafish = getBM(attributes, filters="with_mmusculus_homolog",values=TRUE, mart = zebrafish, bmHeader=FALSE)
+for(i in 1:length(orth.zebrafish[,1])){
+  if(orth.zebrafish[i,1]==""){
+    orth.zebrafish[i,1]<-orth.zebrafish[i,2]
+  }
+}
+orth.zebrafish<-orth.zebrafish[which(orth.zebrafish$mmusculus_homolog_orthology_type=="ortholog_one2one"),]
+ensembl.zebrafish<- orth.zebrafish[,2]
+external.zebrafish<-orth.zebrafish[,1]
+rownames(orth.zebrafish)<-ensembl.zebrafish
+TFdata_zebrafish <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"),filters = 'go', values = c('GO:0006366', 'GO:0000981', 'GO:0003700', 'GO:0006383', 'GO:0000995', 'GO:0001228', 'GO:0001227'), mart = zebrafish)
+```
+
+## Chicken genes 1to1
+
+```{r cars}
+if(exists("ensembl")==F){
+ensembl<-useMart("ensembl")}
+datasets <- listDatasets(ensembl)
+if(exists("chicken")==F){
+chicken<-useDataset("ggallus_gene_ensembl", mart=ensembl)}
+attributes = c("external_gene_name", "ensembl_gene_id", "mmusculus_homolog_ensembl_gene","mmusculus_homolog_perc_id_r1", "mmusculus_homolog_orthology_type", "mmusculus_homolog_subtype", "mmusculus_homolog_perc_id")
+chicken_genes <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"), mart = chicken)
+for(i in 1:length(chicken_genes[,1])){
+  if(chicken_genes[i,1]==""){
+    chicken_genes[i,1]<-chicken_genes[i,2]
+  }
+}
+orth.chicken = getBM(attributes, filters="with_mmusculus_homolog",values=TRUE, mart = chicken, bmHeader=FALSE)
+for(i in 1:length(orth.chicken[,1])){
+  if(orth.chicken[i,1]==""){
+    orth.chicken[i,1]<-orth.chicken[i,2]
+  }
+}
+orth.chicken<-orth.chicken[which(orth.chicken$mmusculus_homolog_orthology_type=="ortholog_one2one"),]
+ensembl.chicken<- orth.chicken[,2]
+external.chicken<-orth.chicken[,1]
+rownames(orth.chicken)<-ensembl.chicken
+TFdata_chicken <- getBM(attributes=c('external_gene_name',"ensembl_gene_id"),filters = 'go', values = c('GO:0006366', 'GO:0000981', 'GO:0003700', 'GO:0006383', 'GO:0000995', 'GO:0001228', 'GO:0001227'), mart = chicken)
+```
+
+
+#Indentities
+
+This step will be removed in the future, as the identities will be well stablished beforehand and we will know what each cluster stands for. 
+
+```{r , echo=FALSE}
+me9 <- readRDS("../mouse_e9/me9_sct5f.rds")
+era <-readRDS("../chicken_e3/ce3_4f.rds")
+zbf18 <- readRDS("~/Single_cell_phylobrain/zbf/Original_data/GSE158142_zf18s_cc_filt.cluster.rds")
+zbf18 <- UpdateSeuratObject(zbf18)
+```
+
+
+```{r , echo=FALSE}
+me9[['seurat_clusters']]<-lapply(me9[['me9_sct5_res2.8']], function(x) paste("M", x, sep="-"))
+era[['seurat_clusters']]<-lapply(era[['ce3_4']], function(x) paste("C", x, sep="-"))
+zbf18[['seurat_clusters']]<-zbf18[['res.3']]
+Idents(me9) <- "seurat_clusters"
+Idents(era) <- "seurat_clusters"
+Idents(zbf18)<- "seurat_clusters"
+```
+
+```{r cars, warning=FALSE}
+zbf18_orth<-zbf18
+zbf18.data<-GetAssayData(object = zbf18, assay = "RNA")
+zbf18.data_ensembl<-merge(x=zebrafish_genes[,1:2], y=zbf18.data, by.x= "external_gene_name", by.y= "row.names")
+zbf18.data_orth<-merge(x=orth.zebrafish[,2:3], y=zbf18.data_ensembl, by.x= "ensembl_gene_id", by.y= "ensembl_gene_id")
+zbf18.data_orth<-zbf18.data_orth[,-c(1,3)]
+zbf18.data_orth<-merge(x=mouse_genes, y=zbf18.data_orth, by.x = "ensembl_gene_id", by.y = "mmusculus_homolog_ensembl_gene")
+zbf18.data_orth$external_gene_name<-sub('[.]','-',make.names(zbf18.data_orth$external_gene_name, unique=T))
+rownames(zbf18.data_orth)<-toupper(zbf18.data_orth$external_gene_name)
+zbf18.data_orth<-zbf18.data_orth[,-c(1,2)]
+zbf18.data_orth<-Matrix(as.matrix(zbf18.data_orth),sparse=TRUE)
+mouse_gene_assay <- CreateAssayObject(zbf18.data_orth)
+zbf18_orth[['RNA']] <- mouse_gene_assay
+```
+
+```{r cars, warning=FALSE}
+era.data<-GetAssayData(object = era, assay = "RNA")
+era.data_ensembl<-merge(x=chicken_genes[,1:2], y=era.data, by.x= "external_gene_name", by.y= "row.names")
+era.data_orth<-merge(x=orth.chicken[,2:3], y=era.data_ensembl, by.x= "ensembl_gene_id", by.y= "ensembl_gene_id")
+era.data_orth<-era.data_orth[,-c(1,3)]
+era.data_orth<-merge(x=mouse_genes, y=era.data_orth, by.x = "ensembl_gene_id", by.y = "mmusculus_homolog_ensembl_gene")
+era.data_orth$external_gene_name<-sub('[.]','-',make.names(era.data_orth$external_gene_name, unique=T))
+rownames(era.data_orth)<-toupper(era.data_orth$external_gene_name)
+era.data_orth<-era.data_orth[,-c(1,2)]
+era.data_orth<-Matrix(as.matrix(era.data_orth),sparse=TRUE)
+era_orth <- CreateSeuratObject(era.data_orth, assay = "RNA", project = "era_orth")
+era_orth <-AddMetaData(era_orth, era[[]][,-c(2,3)])
+```
+
+
+```{r cars, warning=FALSE}
+me9.data<-GetAssayData(object = me9, assay = "RNA")
+orth.mouse[,1]<-toupper(orth.mouse[,1])
+me9.data_orth<-merge(x=orth.mouse[,1:2], y=me9.data, by.x= "external_gene_name", by.y= "row.names")
+rownames(me9.data_orth)<-me9.data_orth$external_gene_name
+me9.data_orth<-me9.data_orth[,-c(1,2)]
+me9.data_orth<-Matrix(as.matrix(me9.data_orth),sparse=TRUE)
+me9_orth <- CreateSeuratObject(me9.data_orth, assay = "RNA", project = "me9_orth")
+me9_orth <- AddMetaData(me9_orth, me9[[]][,-c(2,3)])
+```
+
+```{r}
+DefaultAssay(me9_orth)<-"RNA"
+me9_orth.list <- SplitObject(me9_orth, split.by = "orig.ident")
+me9_orth.list <- lapply(X = me9_orth.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("percent.mt", "G2M.Score", "S.Score"))
+DefaultAssay(zbf18_orth)<-"RNA"
+zbf.list <- SplitObject(zbf18_orth, split.by="orig.ident")
+zbf.list <- lapply(X = zbf.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("S.Score", "G2M.Score","pt.mito"))
+DefaultAssay(era_orth)<-"RNA"
+chick.list <- SplitObject(era_orth, split.by="orig.ident")
+chick.list <- lapply(X = chick.list, FUN = SCTransform, method = "glmGamPoi",  vars.to.regress = c("S.Score", "G2M.Score","percent.mt", "z.Score", "w.Score", "percent.hist"))
+pb_orth.list <- c(chick.list, me9_orth.list, zbf.list)
+features <- SelectIntegrationFeatures(object.list = pb_orth.list, nfeatures = 2000)
+pb_orth.list <- PrepSCTIntegration(object.list = pb_orth.list, anchor.features = features)
+pb_orth.list <- lapply(X = pb_orth.list, FUN = RunPCA, features = features)
+anchors <- FindIntegrationAnchors(object.list = pb_orth.list, reduction = "cca", dims = 1:50, normalization.method = "SCT", anchor.features = features)
+pb_orth <- IntegrateData(anchorset = anchors, normalization.method = "SCT", dims = 1:50)
+```
+
+```{r, echo=FALSE}
+pb_orth[["Species"]]<-"Animals"
+table(pb_orth@meta.data$orig.ident)
+pb_orth[["Species"]][grep("^s", rownames(pb_orth@meta.data)),]<-"Zebrafish"
+pb_orth[["Species"]][grep("^X", rownames(pb_orth@meta.data)),]<-"Mouse"
+pb_orth[["Species"]][grep("^chicken", pb_orth@meta.data$orig.ident),]<-"Chick"
+table(pb_orth[["Species"]])
+pb_orth[["cell_types"]]<-"Animals"
+pb_orth[["cell_types"]]<- pb_orth@meta.data$seurat_clusters
+table(pb_orth[["cell_types"]])
+```
+
+# Integration
+
+```{r , echo=FALSE}
+pb_orth <- RunPCA(pb_orth, npcs = 50, verbose = FALSE)
+pb_orth <- FindNeighbors(pb_orth, dims = 1:50)
+pb_orth <- FindClusters(pb_orth, resolution = 1)
+pb_orth <- RunUMAP(pb_orth, dims = 1:50)
+```
+
+
+```{r}
+Idents(pb_orth)<-"Species"
+DimPlot(pb_orth)
+pdf("integration_me9,zbf18,ce3.pdf", width =8.26772, height = 5.75)
+DimPlot(pb_orth)
+dev.off()
+pdf("integration_me9,zbf18,ce3_split.pdf", width =24.8, height = 5.75)
+Idents(pb_orth)<-"cell_types"
+DimPlot(pb_orth, split.by = "Species", label = T)+NoLegend()
+dev.off()
+```
+
+
+```{r}
+Idents(pb_orth)<-"seurat_clusters"
+pdf("integration_me9,zbf18,ce3_reclusterized.pdf",width =8.26772, height = 5.75)
+DimPlot(pb_orth)+NoLegend()
+dev.off()
+```
+```{r}
+Idents(pb_orth)<-"seurat_clusters"
+per<-table(pb_orth@meta.data$seurat_clusters, pb_orth@meta.data$Species)
+percent<-data.frame(per[,1], per[,2], per[,3])
+colnames(percent)<-c("Chicken","Mouse", "Zebrafish")
+percent2<-percent/colSums(percent)
+percent3<-percent2/rowSums(percent2)
+percent3$Clusters<-rownames(percent3)
+percent4<-percent3 %>% pivot_longer(cols = c(Chicken, Mouse, Zebrafish), names_to = "Species", values_to = "Percent")
+percent4$Percent<-round(percent4$Percent*100)
+percent4$Clusters<-as.numeric(percent4$Clusters)
+percent4 <- percent4[order(-percent4$Clusters),]
+percent4 %>% ggplot(aes(x = Clusters, y = Percent, fill = Species))+
+  geom_bar(stat = "identity")+
+  scale_x_continuous(breaks=unique(percent4$Clusters) )+
+  geom_text(aes(label = paste(Percent,"%"), y = Percent), 
+            position = position_stack(vjust = 0.5))+
+  coord_flip()+
+  labs(x = "Cluster", y = "Percentage",fill = "Species")
+pdf("fig_integration_reclusterization.pdf")
+percent4 %>% ggplot(aes(x = Clusters, y = Percent, fill = Species))+
+  geom_bar(stat = "identity")+
+  scale_x_continuous(breaks=unique(percent4$Clusters) )+
+  geom_text(aes(label = paste(Percent,"%"), y = Percent), 
+            position = position_stack(vjust = 0.5))+
+  coord_flip()+
+  labs(x = "Cluster", y = "Percentage",fill = "Species")
+dev.off()
+```
+
+```{r}
+Idents(pb_orth)<-"cell_types"
+DimPlot(pb_orth, label = T)+NoLegend()
+pdf("integration_me9_vs_ce3_orig_cell_types.pdf",width =8.26772, height = 5.75)
+DimPlot(pb_orth, label = T)+NoLegend()
+dev.off()
+FeaturePlot(pb_orth, "nFeature_SCT", reduction = "umap")
+pb_orth[[]]
+```
+```{r}
+Idents(pb_orth)<-"seurat_clusters"
+pb_orth.markers <- FindAllMarkers(pb_orth, only.pos = TRUE, min.pct = 0.5, logfc.threshold = 1)
+pb_orth.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+DoHeatmap(pb_orth, features = top10$gene) + NoLegend()
+```
+
+```{r ,fig.width=8, fig.height=6, echo=FALSE}
+Idents(pb_orth)<-"seurat_clusters"
+new.cluster.ids <-c("SPAL N", "MOT N", "HP-RP", "MB/DIEN-RP", "aP2", "pIT", "HB-FP", "OV", "MB/DIEN-FP", "bMB/aIT", "HEM/P3/SPAL", "aR1-2", "P1-2", "HT", "NEU", "aR3-4", "bR1-4", "TEL", "aMB")
+new.cluster.ids<-rev(new.cluster.ids)
+names(new.cluster.ids) <- levels(pb_orth)
+pb_orth <- RenameIdents(pb_orth, new.cluster.ids)
+pb_orth[["pb_orth"]]<-Idents(pb_orth)
+p1<-DimPlot(pb_orth, reduction = "umap", label = TRUE, pt.size = 0.5) + NoLegend()
+p1
+```
+
+```{r}
+pdf("Heatmap_integrated.pdf", height = 15, width = 15)
+DoHeatmap(pb_orth, features = top10$gene) + NoLegend()
+dev.off()
+```
+```{r}
+DefaultAssay(pb_orth)<-"SCT"
+FeaturePlot(pb_orth, "SHOX2")
+```
+```{r}
+Idents(pb_orth)<-"seurat_clusters"
+per<-table(pb_orth@meta.data$seurat_clusters, pb_orth@meta.data$Species)
+percent<-data.frame(per[,1], per[,2])
+colnames(percent)<-c("Chicken","Mouse")
+percent2<-percent/colSums(percent)
+percent3<-percent2/rowSums(percent2)
+percent3$Clusters<-rownames(percent3)
+percent4<-percent3 %>% pivot_longer(cols = c(Chicken, Mouse), names_to = "Species", values_to = "Percent")
+percent4$Percent<-round(percent4$Percent*100)
+percent4$Clusters<-as.numeric(percent4$Clusters)
+percent4 <- percent4[order(-percent4$Clusters),]
+percent4 %>% ggplot(aes(x = Clusters, y = Percent, fill = Species))+
+  geom_bar(stat = "identity")+
+  scale_x_continuous(breaks=unique(percent4$Clusters) )+
+  geom_text(aes(label = paste(Percent,"%"), y = Percent), 
+            position = position_stack(vjust = 0.5))+
+  coord_flip()+
+  labs(x = "Cluster", y = "Percentage",fill = "Species")
+pdf("fig_integration_reclusterization.pdf")
+percent4 %>% ggplot(aes(x = Clusters, y = Percent, fill = Species))+
+  geom_bar(stat = "identity")+
+  scale_x_continuous(breaks=unique(percent4$Clusters) )+
+  geom_text(aes(label = paste(Percent,"%"), y = Percent), 
+            position = position_stack(vjust = 0.5))+
+  coord_flip()+
+  labs(x = "Cluster", y = "Percentage",fill = "Species")
+dev.off()
+```
+
+```{r}
+sce<-as.SingleCellExperiment(pb_orth)
+se<-as(sce, "SummarizedExperiment")
+rownames(se)<-rownames(sce)
+se
+DefaultAssay(pb_orth)<-"SCT"
+FeaturePlot(pb_orth, "VAX1")
+```
+
+```{r}
+data(GOmouse)
+AUROC_scores = MetaNeighbor(dat = se,
+                            experiment_labels = as.numeric(factor(se$seurat_clusters)),
+                            celltype_labels = table(rownames(colData(se)),colData(se)[["Species"]]),
+                            genesets = GOmouse,
+                            bplot = TRUE)
+```
